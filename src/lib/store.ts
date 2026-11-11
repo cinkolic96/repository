@@ -159,6 +159,14 @@ export function applyRemoteUpsert(kind: Kind, item: AnyItem) {
   emit();
 }
 
+/** Kompletno svježe stanje sa servera (usklađivanje nakon prekida veze). */
+export function applyRemoteSnapshot(db: DB) {
+  if (JSON.stringify(db) === JSON.stringify(state)) return;
+  state = db;
+  persist();
+  emit();
+}
+
 export function applyRemoteDelete(id: string) {
   let changed = false;
   const next = { ...state };

@@ -3,6 +3,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import {
   applyRemoteDelete,
+  applyRemoteSnapshot,
   applyRemoteSettings,
   applyRemoteUpsert,
   cachedAgencyData,
@@ -219,7 +220,11 @@ export function retrySync() {
   void runQueue();
 }
 
-if (typeof window !== 'undefined') window.addEventListener('online', () => void runQueue());
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    void runQueue().then(() => resync());
+  });
+}
 
 const remoteAdapter: Remote = {
   upsert: (kind, items) => enqueue({ t: 'upsert', kind, items }),
@@ -230,6 +235,34 @@ const remoteAdapter: Remote = {
 // ---------- Povezivanje ----------
 
 let channel: RealtimeChannel | null = null;
+let resyncing = false;
+
+/**
+ * Ponovo učitava sve sa servera i zamjenjuje lokalno stanje. Poziva se kad se
+ * realtime veza (ponovo) uspostavi ili se aplikacija vrati u fokus, da se
+ * ne propuste promjene nastale dok veza nije radila.
+ */
+async function resync() {
+  const id = agency;
+  if (!id || resyncing || queue.length) return;
+  resyncing = true;
+  try {
+    const db = await fetchAll(id);
+    if (id === agency && !queue.length) applyRemoteSnapshot(db);
+  } catch {
+    /* bez interneta – pokušaće se ponovo */
+  } finally {
+    resyncing = false;
+  }
+}
+
+let hiddenAt = 0;
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = Date.now();
+    else if (Date.now() - hiddenAt > 30_000) void resync();
+  });
+}
 
 /**
  * Učitava podatke agencije i uključuje sinhronizaciju. Ako server nije
@@ -279,7 +312,9 @@ export async function openAgency(agencyId: string): Promise<{ offline: boolean }
       const row = payload.new as { name: string; settings: Settings };
       if (!queue.some((op) => op.t === 'settings')) applyRemoteSettings({ ...row.settings, agencyName: row.name });
     })
-    .subscribe();
+    .subscribe((st) => {
+      if (st === 'SUBSCRIBED') void resync();
+    });
   return { offline };
 }
 
