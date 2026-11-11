@@ -2,7 +2,11 @@ import { useRef, useState } from 'react';
 import { Field, PageHead, num } from '../components/ui';
 import { isoDate } from '../lib/calc';
 import { demoDB } from '../lib/demo';
-import { exportJSON, importJSON, replaceDB, resetDB, saveSettings, useDB } from '../lib/store';
+import { exportJSON, importJSON, localDeviceData, markLocalMigrated, mergeDB, replaceDB, resetDB, saveSettings, useDB } from '../lib/store';
+import { withUuids } from '../lib/cloud';
+import { useSession } from '../lib/session';
+import Team from '../components/Team';
+import SyncBadge from '../components/SyncBadge';
 import type { Settings } from '../lib/types';
 
 export default function SettingsPage() {
@@ -11,6 +15,27 @@ export default function SettingsPage() {
   const [newLoc, setNewLoc] = useState('');
   const [saved, setSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const session = useSession();
+  const cloud = session.mode === 'cloud';
+  const local = cloud ? localDeviceData() : null;
+
+  if (session.role !== 'owner') {
+    return (
+      <>
+        <PageHead title="Podešavanja" />
+        <div className="card card-pad stack">
+          <h2>Nalog</h2>
+          <SyncBadge />
+          <div>{session.email} · <span className="muted">Radnik u agenciji „{db.settings.agencyName}“</span></div>
+          <p className="small muted" style={{ margin: 0 }}>Podešavanja agencije može mijenjati samo vlasnik.</p>
+          <div className="row">
+            {session.signOut && <button className="btn" onClick={session.signOut}>Odjavi se</button>}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   const up = (p: Partial<Settings>) => { setS((x) => ({ ...x, ...p })); setSaved(false); };
 
   const backup = () => {
@@ -72,10 +97,14 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {cloud && <Team />}
+
         <div className="card card-pad stack">
           <h2>Podaci i rezervna kopija</h2>
           <p className="small muted" style={{ margin: 0 }}>
-            Podaci se trenutno čuvaju na ovom uređaju. Redovno pravite rezervnu kopiju. ({db.vehicles.length} vozila, {db.customers.length} klijenata, {db.rentals.length} izdavanja, {db.expenses.length} troškova)
+            {cloud
+              ? 'Podaci se čuvaju na serveru i dostupni su na svim uređajima vašeg tima. Rezervnu kopiju možete i preuzeti.'
+              : 'Podaci se trenutno čuvaju samo na ovom uređaju. Redovno pravite rezervnu kopiju.'} ({db.vehicles.length} vozila, {db.customers.length} klijenata, {db.rentals.length} izdavanja, {db.expenses.length} troškova)
           </p>
           <div className="row">
             <button className="btn" onClick={backup}>Preuzmi rezervnu kopiju (JSON)</button>
@@ -84,13 +113,25 @@ export default function SettingsPage() {
               const f = e.target.files?.[0];
               if (!f) return;
               if (!confirm('Ovo će zamijeniti sve trenutne podatke. Nastaviti?')) return;
-              try { importJSON(await f.text()); setS(JSON.parse(exportJSON()).settings); alert('Podaci vraćeni.'); } catch { alert('Neispravan fajl.'); }
+              try { importJSON(await f.text(), cloud ? withUuids : undefined); setS(JSON.parse(exportJSON()).settings); alert('Podaci vraćeni.'); } catch { alert('Neispravan fajl.'); }
               e.target.value = '';
             }} />
           </div>
+          {local && (
+            <div className="notice info">
+              Na ovom uređaju postoje podaci iz vremena prije prijave ({local.vehicles.length} vozila, {local.rentals.length} izdavanja).{' '}
+              <button className="btn small" onClick={() => {
+                if (!confirm('Dodati podatke sa ovog uređaja na server agencije?')) return;
+                mergeDB(withUuids(local));
+                markLocalMigrated();
+                setS({ ...s });
+                alert('Podaci su dodati.');
+              }}>Prenesi na server</button>
+            </div>
+          )}
           <div className="row">
-            <button className="btn" onClick={() => confirm('Zamijeniti sve podatke demo podacima?') && replaceDB(demoDB())}>Učitaj demo podatke</button>
-            <button className="btn danger" onClick={() => confirm('Obrisati SVE podatke? Ovo se ne može poništiti.') && resetDB()}>Obriši sve podatke</button>
+            <button className="btn" onClick={() => confirm('Zamijeniti sve podatke demo podacima?' + (cloud ? ' Ovo važi za cijeli tim!' : '')) && replaceDB({ ...demoDB(), settings: db.settings })}>Učitaj demo podatke</button>
+            <button className="btn danger" onClick={() => confirm('Obrisati SVA vozila, klijente, izdavanja i troškove?' + (cloud ? ' Brišu se na serveru za cijeli tim!' : '') + ' Ovo se ne može poništiti.') && resetDB()}>Obriši sve podatke</button>
           </div>
         </div>
       </div>

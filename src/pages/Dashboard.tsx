@@ -16,11 +16,13 @@ import {
 } from '../lib/calc';
 import { demoDB } from '../lib/demo';
 import { replaceDB, useDB } from '../lib/store';
+import { useIsOwner } from '../lib/session';
 
 export default function Dashboard() {
   const db = useDB();
   const money = useMoney();
   const nav = useNavigate();
+  const isOwner = useIsOwner();
   const now = new Date();
   const vehicles = db.vehicles.filter((v) => !v.archived);
 
@@ -29,10 +31,10 @@ export default function Dashboard() {
       <>
         <PageHead title="Dobrodošli u RentManager" />
         <div className="card card-pad stack">
-          <p>Počnite dodavanjem vozila iz vašeg voznog parka, ili učitajte demo podatke da isprobate aplikaciju.</p>
+          <p>Počnite dodavanjem vozila iz vašeg voznog parka{isOwner ? ', ili učitajte demo podatke da isprobate aplikaciju' : ''}.</p>
           <div className="row">
             <Link className="btn primary" to="/vozila/novo">+ Dodaj prvo vozilo</Link>
-            <button className="btn" onClick={() => replaceDB(demoDB())}>Učitaj demo podatke</button>
+            {isOwner && <button className="btn" onClick={() => replaceDB({ ...demoDB(), settings: db.settings })}>Učitaj demo podatke</button>}
           </div>
         </div>
       </>
@@ -92,10 +94,10 @@ export default function Dashboard() {
           <div className="card kpi"><div className="label">Vozila ukupno</div><div className="value">{vehicles.length}</div><div className="hint">{outOfService} van upotrebe</div></div>
           <div className="card kpi"><div className="label">Trenutno izdato</div><div className="value">{rented}</div><div className="hint">{vehicles.length ? Math.round((rented / vehicles.length) * 100) : 0}% voznog parka</div></div>
           <div className="card kpi"><div className="label">Dostupno</div><div className="value">{available}</div></div>
-          <div className="card kpi"><div className="label">Prihod ovaj mjesec</div><div className="value">{money(revenue)}</div></div>
-          <div className="card kpi"><div className="label">Troškovi ovaj mjesec</div><div className="value">{money(expenses)}</div></div>
-          <div className="card kpi"><div className="label">Dobit ovaj mjesec</div><div className={'value ' + (revenue - expenses < 0 ? 'money-neg' : '')}>{money(revenue - expenses)}</div></div>
-          <div className="card kpi"><div className="label">Nenaplaćeno</div><div className="value">{money(unpaid)}</div><div className="hint">otvoreni dug klijenata</div></div>
+          {isOwner && <div className="card kpi"><div className="label">Prihod ovaj mjesec</div><div className="value">{money(revenue)}</div></div>}
+          {isOwner && <div className="card kpi"><div className="label">Troškovi ovaj mjesec</div><div className="value">{money(expenses)}</div></div>}
+          {isOwner && <div className="card kpi"><div className="label">Dobit ovaj mjesec</div><div className={'value ' + (revenue - expenses < 0 ? 'money-neg' : '')}>{money(revenue - expenses)}</div></div>}
+          {isOwner && <div className="card kpi"><div className="label">Nenaplaćeno</div><div className="value">{money(unpaid)}</div><div className="hint">otvoreni dug klijenata</div></div>}
         </div>
 
         <div className="grid grid-2">

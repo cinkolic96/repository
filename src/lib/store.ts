@@ -2,13 +2,22 @@ import { useSyncExternalStore } from 'react';
 import type { Customer, DB, Expense, Rental, Settings, Vehicle } from './types';
 
 /**
- * Sloj za podatke. Trenutno se čuva lokalno (localStorage) da aplikacija radi
- * odmah i offline. Sve izmjene idu kroz funkcije ispod, pa se kasnije isti API
- * može prebaciti na server (npr. Supabase/Firebase) bez promjene ekrana.
+ * Sloj za podatke.
+ *
+ * Ekrani čitaju stanje preko useDB() i mijenjaju ga funkcijama ispod. Gdje se
+ * podaci čuvaju zavisi od režima:
+ *  - lokalno: localStorage na ovom uređaju
+ *  - server: svaka promjena se (preko registrovanog `Remote` adaptera) šalje
+ *    na server; promjene drugih korisnika stižu kroz applyRemote*().
  */
 
-const KEY = 'rentacar-db-v1';
+const LOCAL_KEY = 'rentacar-db-v1';
 export const DB_VERSION = 1;
+
+export type Kind = 'vehicles' | 'customers' | 'rentals' | 'expenses';
+export const KINDS: Kind[] = ['vehicles', 'customers', 'rentals', 'expenses'];
+type ItemOf<C extends Kind> = DB[C][number];
+type AnyItem = Vehicle | Customer | Rental | Expense;
 
 export const defaultSettings: Settings = {
   agencyName: 'Moja Rent-a-Car agencija',
@@ -28,33 +37,149 @@ export function emptyDB(): DB {
   return { version: DB_VERSION, vehicles: [], customers: [], rentals: [], expenses: [], settings: defaultSettings };
 }
 
-function load(): DB {
+export function normalizeDB(parsed: Partial<DB>): DB {
+  return { ...emptyDB(), ...parsed, settings: { ...defaultSettings, ...(parsed.settings ?? {}) } };
+}
+
+function readLocal(key = LOCAL_KEY): DB | null {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return emptyDB();
-    const parsed = JSON.parse(raw) as DB;
-    return { ...emptyDB(), ...parsed, settings: { ...defaultSettings, ...parsed.settings } };
+    const raw = localStorage.getItem(key);
+    return raw ? normalizeDB(JSON.parse(raw)) : null;
   } catch {
-    return emptyDB();
+    return null;
   }
 }
 
-let state: DB = load();
+/** Podaci sačuvani lokalno na ovom uređaju (prije prelaska na server). */
+export function localDeviceData(): DB | null {
+  const db = readLocal();
+  if (!db) return null;
+  const count = db.vehicles.length + db.customers.length + db.rentals.length + db.expenses.length;
+  return count > 0 ? db : null;
+}
+
+/**
+ * Poslije prenosa na server lokalne podatke čuvamo pod drugim ključem (kao
+ * rezervu), da se ne bi ponovo nudio prenos i napravili duplikati.
+ */
+export function markLocalMigrated() {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (raw) localStorage.setItem(`${LOCAL_KEY}-preneseno-${new Date().toISOString().slice(0, 10)}`, raw);
+    localStorage.removeItem(LOCAL_KEY);
+  } catch {
+    /* ignoriši */
+  }
+}
+
+// ---------- Adapter za server ----------
+
+export interface Remote {
+  upsert(kind: Kind, items: AnyItem[]): void;
+  remove(ids: string[]): void;
+  saveSettings(s: Settings): void;
+}
+
+let remote: Remote | null = null;
+let cacheKey: string | null = null;
+
+let state: DB = readLocal() ?? emptyDB();
 const listeners = new Set<() => void>();
 
+function emit() {
+  listeners.forEach((l) => l());
+}
+
 function persist() {
+  const key = remote ? cacheKey : LOCAL_KEY;
+  if (!key) return;
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    localStorage.setItem(key, JSON.stringify(state));
   } catch (e) {
     console.error('Snimanje nije uspjelo', e);
-    alert('Snimanje podataka nije uspjelo (memorija puna?). Napravite rezervnu kopiju u Podešavanjima.');
+    if (!remote) alert('Snimanje podataka nije uspjelo (memorija puna?). Napravite rezervnu kopiju u Podešavanjima.');
   }
+}
+
+/** Šalje serveru samo ono što se promijenilo između dva stanja. */
+function pushDiff(prev: DB, next: DB) {
+  if (!remote) return;
+  const removed: string[] = [];
+  for (const kind of KINDS) {
+    const before = new Map((prev[kind] as AnyItem[]).map((x) => [x.id, x]));
+    const changed: AnyItem[] = [];
+    for (const item of next[kind] as AnyItem[]) {
+      if (before.get(item.id) !== item) changed.push(item);
+      before.delete(item.id);
+    }
+    if (changed.length) remote.upsert(kind, changed);
+    removed.push(...before.keys());
+  }
+  if (removed.length) remote.remove(removed);
+  if (prev.settings !== next.settings) remote.saveSettings(next.settings);
 }
 
 function set(next: DB) {
+  const prev = state;
+  state = next;
+  pushDiff(prev, next);
+  persist();
+  emit();
+}
+
+/** Uključuje režim servera sa učitanim podacima agencije. */
+export function connectRemote(r: Remote, db: DB, agencyId: string) {
+  remote = r;
+  cacheKey = `rentacar-cache-${agencyId}`;
+  state = db;
+  persist();
+  emit();
+}
+
+/** Keš podataka agencije (za rad kad nema interneta). */
+export function cachedAgencyData(agencyId: string): DB | null {
+  return readLocal(`rentacar-cache-${agencyId}`);
+}
+
+export function disconnectRemote() {
+  remote = null;
+  cacheKey = null;
+  state = emptyDB();
+  emit();
+}
+
+/** Promjena koja je stigla sa servera (drugi korisnik/uređaj) – ne šalje se nazad. */
+export function applyRemoteUpsert(kind: Kind, item: AnyItem) {
+  const list = state[kind] as AnyItem[];
+  const cur = list.find((x) => x.id === item.id);
+  if (cur && JSON.stringify(cur) === JSON.stringify(item)) return;
+  const next = cur ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item];
+  state = { ...state, [kind]: next };
+  persist();
+  emit();
+}
+
+export function applyRemoteDelete(id: string) {
+  let changed = false;
+  const next = { ...state };
+  for (const kind of KINDS) {
+    const list = state[kind] as AnyItem[];
+    if (list.some((x) => x.id === id)) {
+      (next as Record<Kind, AnyItem[]>)[kind] = list.filter((x) => x.id !== id);
+      changed = true;
+    }
+  }
+  if (!changed) return;
   state = next;
   persist();
-  listeners.forEach((l) => l());
+  emit();
+}
+
+export function applyRemoteSettings(s: Settings) {
+  if (JSON.stringify(s) === JSON.stringify(state.settings)) return;
+  state = { ...state, settings: { ...defaultSettings, ...s } };
+  persist();
+  emit();
 }
 
 export function getDB(): DB {
@@ -72,31 +197,32 @@ export function useDB(): DB {
 }
 
 if (typeof window !== 'undefined') {
-  // Sinhronizacija između više otvorenih tabova
+  // Sinhronizacija između više otvorenih tabova (lokalni režim)
   window.addEventListener('storage', (e) => {
-    if (e.key === KEY) {
-      state = load();
-      listeners.forEach((l) => l());
+    if (!remote && e.key === LOCAL_KEY) {
+      state = readLocal() ?? emptyDB();
+      emit();
     }
   });
 }
 
 export function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  // Rezervna varijanta – UUID v4 format (server očekuje uuid)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
-type Coll = 'vehicles' | 'customers' | 'rentals' | 'expenses';
-type ItemOf<C extends Coll> = DB[C][number];
-
-function upsert<C extends Coll>(coll: C, item: ItemOf<C>) {
+function upsert<C extends Kind>(coll: C, item: ItemOf<C>) {
   const list = state[coll] as ItemOf<C>[];
   const exists = list.some((x) => x.id === item.id);
   const next = exists ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item];
   set({ ...state, [coll]: next });
 }
 
-function remove(coll: Coll, id: string) {
+function remove(coll: Kind, id: string) {
   set({ ...state, [coll]: (state[coll] as { id: string }[]).filter((x) => x.id !== id) });
 }
 
@@ -120,8 +246,11 @@ export function deleteRental(id: string) {
 
 export function deleteVehicle(id: string): string | null {
   if (state.rentals.some((r) => r.vehicleId === id)) return 'Vozilo ima izdavanja – umjesto brisanja ga arhivirajte.';
-  remove('vehicles', id);
-  set({ ...state, expenses: state.expenses.map((e) => (e.vehicleId === id ? { ...e, vehicleId: undefined } : e)) });
+  set({
+    ...state,
+    vehicles: state.vehicles.filter((v) => v.id !== id),
+    expenses: state.expenses.map((e) => (e.vehicleId === id ? { ...e, vehicleId: undefined } : e)),
+  });
   return null;
 }
 
@@ -148,16 +277,26 @@ export function exportJSON(): string {
   return JSON.stringify(state, null, 2);
 }
 
-export function importJSON(json: string) {
+export function importJSON(json: string, transform: (db: DB) => DB = (d) => d) {
   const parsed = JSON.parse(json) as DB;
   if (!Array.isArray(parsed.vehicles) || !Array.isArray(parsed.rentals)) throw new Error('Neispravan fajl');
-  set({ ...emptyDB(), ...parsed, settings: { ...defaultSettings, ...parsed.settings } });
+  set(transform(normalizeDB(parsed)));
 }
 
 export function replaceDB(db: DB) {
   set(db);
 }
 
+/** Dodaje podatke (npr. sa ovog uređaja) postojećim, bez brisanja. */
+export function mergeDB(db: DB) {
+  const next = { ...state };
+  for (const kind of KINDS) {
+    const ids = new Set((state[kind] as AnyItem[]).map((x) => x.id));
+    (next as Record<Kind, AnyItem[]>)[kind] = [...(state[kind] as AnyItem[]), ...(db[kind] as AnyItem[]).filter((x) => !ids.has(x.id))];
+  }
+  set(next);
+}
+
 export function resetDB() {
-  set(emptyDB());
+  set({ ...emptyDB(), settings: state.settings });
 }

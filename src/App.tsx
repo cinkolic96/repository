@@ -1,6 +1,8 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { IconCalendar, IconCar, IconChart, IconHome, IconKey, IconMore, IconSettings, IconUsers, IconWallet } from './components/icons';
 import { useDB } from './lib/store';
+import { useSession } from './lib/session';
+import SyncBadge from './components/SyncBadge';
 import Dashboard from './pages/Dashboard';
 import CalendarPage from './pages/Calendar';
 import Rentals from './pages/Rentals';
@@ -17,19 +19,22 @@ import Reports from './pages/Reports';
 import SettingsPage from './pages/Settings';
 import More from './pages/More';
 
-const links = [
+const allLinks = [
   { to: '/', label: 'Pregled', icon: <IconHome />, end: true },
   { to: '/kalendar', label: 'Kalendar', icon: <IconCalendar /> },
   { to: '/izdavanja', label: 'Izdavanja', icon: <IconKey /> },
   { to: '/vozila', label: 'Vozila', icon: <IconCar /> },
   { to: '/klijenti', label: 'Klijenti', icon: <IconUsers /> },
   { to: '/troskovi', label: 'Troškovi', icon: <IconWallet /> },
-  { to: '/izvjestaji', label: 'Izvještaji', icon: <IconChart /> },
+  { to: '/izvjestaji', label: 'Izvještaji', icon: <IconChart />, ownerOnly: true },
   { to: '/podesavanja', label: 'Podešavanja', icon: <IconSettings /> },
 ];
 
 export default function App() {
   const { settings } = useDB();
+  const session = useSession();
+  const isOwner = session.role === 'owner';
+  const links = allLinks.filter((l) => isOwner || !l.ownerOnly);
   return (
     <div className="app">
       <aside className="sidebar">
@@ -48,8 +53,20 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <div className="sidebar-foot">
+          <SyncBadge />
+          {session.email && (
+            <div className="small muted" style={{ marginTop: 8, wordBreak: 'break-all' }}>
+              {session.email}
+              <div>{isOwner ? 'Vlasnik' : 'Radnik'}</div>
+            </div>
+          )}
+          {session.switchAgency && <button className="btn small" style={{ marginTop: 8, width: '100%' }} onClick={session.switchAgency}>Promijeni agenciju</button>}
+          {session.signOut && <button className="btn small" style={{ marginTop: 8, width: '100%' }} onClick={session.signOut}>Odjavi se</button>}
+        </div>
       </aside>
       <main className="main">
+        <div className="mobile-sync"><SyncBadge /></div>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/kalendar" element={<CalendarPage />} />
@@ -66,7 +83,7 @@ export default function App() {
           <Route path="/klijenti/:id" element={<CustomerDetail />} />
           <Route path="/klijenti/:id/uredi" element={<CustomerForm />} />
           <Route path="/troskovi" element={<Expenses />} />
-          <Route path="/izvjestaji" element={<Reports />} />
+          {isOwner && <Route path="/izvjestaji" element={<Reports />} />}
           <Route path="/podesavanja" element={<SettingsPage />} />
           <Route path="/vise" element={<More links={links.slice(4)} />} />
           <Route path="*" element={<div className="empty">Stranica ne postoji.</div>} />
