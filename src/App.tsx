@@ -1,5 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { IconCalendar, IconCar, IconChart, IconHome, IconKey, IconMore, IconSettings, IconUsers, IconWallet } from './components/icons';
+import { IconShield, IconCalendar, IconCar, IconChart, IconHome, IconKey, IconMore, IconSettings, IconUsers, IconWallet } from './components/icons';
 import { useDB } from './lib/store';
 import { useSession } from './lib/session';
 import SyncBadge from './components/SyncBadge';
@@ -18,6 +18,7 @@ import Expenses from './pages/Expenses';
 import Reports from './pages/Reports';
 import SettingsPage from './pages/Settings';
 import More from './pages/More';
+import AdminPage from './pages/Admin';
 
 const allLinks = [
   { to: '/', label: 'Pregled', icon: <IconHome />, end: true },
@@ -34,7 +35,10 @@ export default function App() {
   const { settings } = useDB();
   const session = useSession();
   const isOwner = session.role === 'owner';
-  const links = allLinks.filter((l) => isOwner || !l.ownerOnly);
+  const links = [
+    ...allLinks.filter((l) => isOwner || !l.ownerOnly),
+    ...(session.isAdmin ? [{ to: '/admin', label: 'Administracija', icon: <IconShield /> }] : []),
+  ];
   return (
     <div className="app">
       <aside className="sidebar">
@@ -84,6 +88,7 @@ export default function App() {
           <Route path="/klijenti/:id/uredi" element={<CustomerForm />} />
           <Route path="/troskovi" element={<Expenses />} />
           {isOwner && <Route path="/izvjestaji" element={<Reports />} />}
+          {session.isAdmin && <Route path="/admin" element={<AdminPage />} />}
           <Route path="/podesavanja" element={<SettingsPage />} />
           <Route path="/vise" element={<More links={links.slice(4)} />} />
           <Route path="*" element={<div className="empty">Stranica ne postoji.</div>} />

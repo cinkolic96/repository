@@ -258,6 +258,10 @@ async function resync() {
 
 let hiddenAt = 0;
 if (typeof document !== 'undefined') {
+  // Osiguranje: povremeno usklađivanje dok je aplikacija otvorena
+  setInterval(() => {
+    if (!document.hidden) void resync();
+  }, 120_000);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) hiddenAt = Date.now();
     else if (Date.now() - hiddenAt > 30_000) void resync();
@@ -348,4 +352,89 @@ export function withUuids(db: DB): DB {
     rentals: db.rentals.map((r) => ({ ...r, id: fix(r.id), vehicleId: fix(r.vehicleId), customerId: fix(r.customerId) })),
     expenses: db.expenses.map((e) => ({ ...e, id: fix(e.id), vehicleId: ref(e.vehicleId) })),
   };
+}
+
+// ---------- Administrator platforme (samo čitanje) ----------
+
+export async function isPlatformAdmin(): Promise<boolean> {
+  try {
+    const { data, error } = await sb().rpc('is_platform_admin');
+    return !error && data === true;
+  } catch {
+    return false;
+  }
+}
+
+export interface AdminUser {
+  userId: string;
+  email: string;
+  createdAt: string;
+  lastSignInAt: string | null;
+  emailConfirmed: boolean;
+  memberships: { agencyId: string; role: Role }[];
+}
+
+export interface AdminAgency {
+  id: string;
+  name: string;
+  createdAt: string;
+  db: DB;
+  lastActivity: string | null;
+}
+
+export interface AdminData {
+  agencies: AdminAgency[];
+  users: AdminUser[];
+}
+
+export async function loadAdminData(): Promise<AdminData> {
+  const db = sb();
+  const agencies = check(await db.rpc('admin_agencies')) as { id: string; name: string; settings: Partial<Settings>; created_at: string }[];
+  const userRows = check(await db.rpc('admin_users')) as {
+    user_id: string;
+    email: string;
+    created_at: string;
+    last_sign_in_at: string | null;
+    email_confirmed: boolean;
+    agency_id: string | null;
+    role: Role | null;
+  }[];
+  const records: { agency_id: string; kind: Kind; data: never; updated_at: string }[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const rows = check(await db.rpc('admin_records', { p_offset: offset, p_limit: PAGE })) as typeof records;
+    records.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+
+  const byAgency = new Map<string, AdminAgency>();
+  for (const a of agencies) {
+    byAgency.set(a.id, {
+      id: a.id,
+      name: a.name,
+      createdAt: a.created_at,
+      lastActivity: null,
+      db: normalizeDB({ ...emptyDB(), settings: { ...emptyDB().settings, ...a.settings, agencyName: a.name } }),
+    });
+  }
+  for (const r of records) {
+    const a = byAgency.get(r.agency_id);
+    if (!a || !KINDS.includes(r.kind)) continue;
+    (a.db[r.kind] as unknown[]).push(r.data);
+    if (!a.lastActivity || r.updated_at > a.lastActivity) a.lastActivity = r.updated_at;
+  }
+
+  const users = new Map<string, AdminUser>();
+  for (const u of userRows) {
+    const cur = users.get(u.user_id) ?? {
+      userId: u.user_id,
+      email: u.email,
+      createdAt: u.created_at,
+      lastSignInAt: u.last_sign_in_at,
+      emailConfirmed: u.email_confirmed,
+      memberships: [],
+    };
+    if (u.agency_id && u.role) cur.memberships.push({ agencyId: u.agency_id, role: u.role });
+    users.set(u.user_id, cur);
+  }
+  return { agencies: [...byAgency.values()], users: [...users.values()] };
 }

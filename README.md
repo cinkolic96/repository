@@ -38,6 +38,17 @@ nevraćen depozit.
 
 Bez `.env.local` aplikacija radi kao ranije – samo lokalno na uređaju.
 
+### Administrator platforme
+
+Vlasnik platforme može vidjeti pregled **svih** agencija i korisnika (samo čitanje):
+1. U SQL Editoru pokrenite `supabase/migrations/0002_admin.sql`.
+2. Dodajte sebe kao administratora:
+   ```sql
+   insert into public.platform_admins (user_id)
+   select id from auth.users where email = 'vas@email.com';
+   ```
+3. Odjavite se i ponovo prijavite – u meniju se pojavljuje **Administracija**.
+
 **Sigurnost:** svaka tabela ima Row Level Security – korisnik vidi i mijenja samo podatke
 agencije čiji je član; pozivnice i članove vidi/mijenja samo vlasnik. Ograničenje da radnik
 ne vidi izvještaje je u interfejsu aplikacije (podatke o najmovima radnik i inače mora vidjeti).

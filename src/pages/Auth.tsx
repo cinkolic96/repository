@@ -132,12 +132,14 @@ export function OnboardingPage({
   onCreate,
   onRefresh,
   onSignOut,
+  onAdmin,
 }: {
   email: string;
   localSummary: string | null;
   onCreate: (name: string, importLocal: boolean) => Promise<void>;
   onRefresh: () => void;
   onSignOut: () => void;
+  onAdmin?: () => void;
 }) {
   const [name, setName] = useState('');
   const [importLocal, setImportLocal] = useState(true);
@@ -146,6 +148,7 @@ export function OnboardingPage({
   return (
     <AuthCard title="Dobrodošli!">
       <p className="small muted" style={{ marginTop: 0 }}>Prijavljeni ste kao <strong>{email}</strong>.</p>
+      {onAdmin && <button className="btn" style={{ width: '100%', marginBottom: 16 }} onClick={onAdmin}>Administracija platforme →</button>}
       <div className="stack">
         <form
           className="stack"

@@ -8,6 +8,8 @@ export interface SessionInfo {
   agencyId?: string;
   role: Role;
   offline?: boolean;
+  /** Administrator platforme – vidi pregled svih agencija */
+  isAdmin?: boolean;
   signOut?: () => void;
   /** Ima više agencija – može da promijeni */
   switchAgency?: () => void;

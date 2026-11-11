@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import App from './App';
-import { acceptInvites, closeAgency, createAgency, myMemberships, openAgency, withUuids, type Membership } from './lib/cloud';
+import { acceptInvites, closeAgency, createAgency, isPlatformAdmin, myMemberships, openAgency, withUuids, type Membership } from './lib/cloud';
+import AdminPage from './pages/Admin';
 import { SessionContext, type SessionInfo } from './lib/session';
 import { getDB, localDeviceData, markLocalMigrated, mergeDB, saveSettings } from './lib/store';
 import { cloudEnabled, supabase } from './lib/supabase';
@@ -29,6 +30,7 @@ type Phase =
   | { k: 'signedOut' }
   | { k: 'recovery' }
   | { k: 'onboarding' }
+  | { k: 'adminOnly' }
   | { k: 'pick'; list: Membership[] }
   | { k: 'ready'; m: Membership; offline: boolean; multiple: boolean }
   | { k: 'error'; message: string };
@@ -49,6 +51,7 @@ function CloudGate() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>({ k: 'loading' });
   const recovery = useRef(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const sb = supabase!;
@@ -83,6 +86,7 @@ function CloudGate() {
     setPhase({ k: 'loading' });
     try {
       await acceptInvites();
+      setIsAdmin(await isPlatformAdmin());
       const list = await myMemberships(userId);
       if (list.length === 0) return setPhase({ k: 'onboarding' });
       const last = list.find((m) => m.agencyId === lastAgency()?.agencyId);
@@ -118,6 +122,13 @@ function CloudGate() {
   if (!session || phase.k === 'signedOut') return <LoginPage />;
   if (phase.k === 'error') return <ErrorScreen message={phase.message} onRetry={() => resolve(session.user.id)} onSignOut={signOut} />;
   if (phase.k === 'pick') return <AgencyPicker agencies={phase.list} onPick={(id) => enter(phase.list.find((m) => m.agencyId === id)!, true)} onSignOut={signOut} />;
+  if (phase.k === 'adminOnly') {
+    return (
+      <main className="main" style={{ margin: '0 auto' }}>
+        <AdminPage onBack={() => setPhase({ k: 'onboarding' })} />
+      </main>
+    );
+  }
   if (phase.k === 'onboarding') {
     return (
       <OnboardingPage
@@ -125,6 +136,7 @@ function CloudGate() {
         localSummary={localSummary()}
         onRefresh={() => resolve(session.user.id)}
         onSignOut={signOut}
+        onAdmin={isAdmin ? () => setPhase({ k: 'adminOnly' }) : undefined}
         onCreate={async (name, importLocal) => {
           const agencyId = await createAgency(name);
           const m: Membership = { agencyId, agencyName: name, role: 'owner' };
@@ -149,6 +161,7 @@ function CloudGate() {
     agencyId: phase.m.agencyId,
     role: phase.m.role,
     offline: phase.offline,
+    isAdmin,
     signOut,
     switchAgency: phase.multiple
       ? async () => {
