@@ -1,0 +1,7 @@
+# Objava na Netlify: build komanda i folder sa gotovom aplikacijom
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
